@@ -19,116 +19,91 @@ def DEBUG(string):
     if(debugging):
         print("| DB:: ", string, " |")
 
-# Compiles all layers together into resultant image for testing
-def testCollateData(width, height):
-    out_image = Image.new(mode = "RGB", size = (width, height), color = (int(0),int(0),int(255)))
-    pixels = out_image.load()
-    
-
-    # First Run of Pop
-    with rasterio.open("output/layer0.tif") as dataset:
-        layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-        max = layer_data.max()
-        co = 255 / max
-        for i in range(width):
-            for j in range(height):
-                if (layer_data[j,i] > 0):
-                    pixels[i,j] = (int(layer_data[j,i]*co), int(0), int(0))
-
-    # Second run for EVI
-    with rasterio.open("output/layer2.tif") as dataset:
-        layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-        max = layer_data.max()
-        co =  255 / max
-        for i in range(width):
-            for j in range(height):
-                if (layer_data[j,i] > 0):
-                    pixels[i,j] = (int(pixels[i,j][0]), int(layer_data[j,i]*co), int(0))
-
-    filename = "{}.png".format(str(time.time()).replace(".",""))
-    out_image.save(filename, format = "PNG")
-
-    for i in range(3):
-        os.remove("output/layer{}.tif".format(i))
-    return
-
+# Completes the suitability calcualations and exports the resultant image.
+# Side Effects: cleans the tmp/ folder
+# TODO: Utilize a buffer as opposed to constantly re-reading data and doing it in place
 def calcSuitability(width, height):
+    r_buf = np.zeros((width, height))
+    g_buf = np.zeros((width, height))
+
+    # Add population to red channel
+    if(draw_pop):
+        print("Applying population to red buffer...", end = "")
+        with rasterio.open("tmp/popdensity.tif") as dataset:
+            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
+            max = layer_data.max()
+            co = 255 / max
+            for i in range(width):
+                for j in range(height):
+                    if (layer_data[j,i] > 0):
+                        r_buf[i][j] = (layer_data[j,i]*co)
+        print("Done.")
+
+    # Calculate suitability and accumulate on green channel
+    for key in layers.keys():
+        print("Applying suitability for {} to green buffer...".format(key), end = "")
+        with rasterio.open("tmp/{}".format(key)) as dataset:
+            need, contribution = layers[key]
+            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
+            for i in range(width):
+                for j in range(height):
+                    if (layer_data[j,i] > 0):
+                        if (layer_data[j,i] >= need):
+                            g_buf[i][j] += contribution
+                        else:
+                            g_buf[i][j] += (layer_data[j,i]/need) * contribution
+        print("Done.")
+    
     out_image = Image.new(mode = "RGB", size = (width, height))
     pixels = out_image.load()
-    
-    # Calculate Population-related Suitability
-    if(pc > 0):
-        with rasterio.open("output/layer0.tif") as dataset:
-            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
+
+    # Apply values to the out_image pixel map
+    # If draw_water is True, values are clipped to that mask
+    if(draw_water):
+        print("Applying water mask & writing to pixels...", end = "")
+        with rasterio.open("tmp/water_mask.tif") as dataset:
+            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.nearest)
             for i in range(width):
                 for j in range(height):
-                    if (layer_data[j,i] > 0):
-                        if (layer_data[j,i] >= pn):
-                            pixels[i,j] =  (0, int(pc * 255) + pixels[i,j][1], 0)
-                        else:
-                            pixels[i,j] = (0, int((layer_data[j,i]/pn) * pc * 255) + pixels[i,j][1], 0)
-
-    if(sc > 0):
-        with rasterio.open("output/layer1.tif") as dataset:
-            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-            for i in range(width):
-                for j in range(height):
-                    if (layer_data[j,i] > 0):
-                        if (layer_data[j,i] >= sn):
-                            pixels[i,j] =  (0, int(sc * 255) + pixels[i,j][1], 0)
-                        else:
-                            pixels[i,j] = (0, int((layer_data[j,i]/sn) * sc * 255) + pixels[i,j][1], 0)
-
-    if(vc > 0):
-        with rasterio.open("output/layer2.tif") as dataset:
-            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-            for i in range(width):
-                for j in range(height):
-                    if (layer_data[j,i] > 0):
-                        if (layer_data[j,i] >= vn):
-                            pixels[i,j] =  (0, int(vc * 255) + pixels[i,j][1], 0)
-                        else:
-                            pixels[i,j] = (0, int((layer_data[j,i]/vn) * vc * 255) + pixels[i,j][1], 0)
-
-    # First Run of Pop
-    with rasterio.open("output/layer0.tif") as dataset:
-        layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-        max = layer_data.max()
-        co = 255 / max
+                    if (layer_data[j,i] == 1):
+                        pixels[i,j] = (0, 0, 255)
+                    else:
+                        pixels[i,j] = (int(r_buf[i][j]), int(g_buf[i][j] * 255), 0)
+        print("Done.")
+    else:
         for i in range(width):
             for j in range(height):
-                if (layer_data[j,i] > 0):
-                    pixels[i,j] = ((int(layer_data[j,i]*co), pixels[i,j][1], 0))
+                pixels[i,j] = (int(r_buf[i][j]), int(g_buf[i][j] * 255), 0)
 
-    filename = "{}.png".format(str(time.time()).replace(".",""))
+    filename = "output/{}.png".format(str(time.time()).replace(".",""))
+    print("Saving file {}...".format(filename), end = "")
     out_image.save(filename, format = "PNG")
+    print("Done.")
 
-    for i in range(3):
-        os.remove("output/layer{}.tif".format(i))
+    # Clean up temp files
+    print("Cleaning up...", end = "")
+    for key in layers.keys():
+        os.remove("tmp/{}".format(key))
+    print("Done.")
+
     return
 
-
 # TODO : Docstring
-def clipLayers(p1, p2, width, height):
-    layers = ['layers/pop_2020.tif', 'layers/soil_moisture.tif', 'layers/veg_EVI.tif']
-    for i in range(len(layers)):
-        # Open the Geotiff
-        dataset = rasterio.open(layers[i])
-
-        # Get the indeces of the geographic points
-        y1, x1 = dataset.index(p1[0], p1[1])
-        y2, x2 = dataset.index(p2[0], p2[1])
-
-        window = rasterio.windows.Window(x1, y1, x2 - x1, y2 - y1)
-        clip = dataset.read(window=window)
-
-        # Define the metadata and save the image
-        meta = dataset.meta
-        DEBUG("ExportedDataLayers --- WIDTH = {}, HEIGHT = {}".format(window.width,window.height))
-        meta['width'], meta['height'] = window.width, window.height
-        meta['transform'] = rasterio.windows.transform(window, dataset.transform)
-        with rasterio.open("output/layer{}.tif".format(i), 'w', **meta) as dst:
-            dst.write(clip)
+def clipLayer(key, p1, p2, width, height):
+    # Open the Geotiff
+    dataset = rasterio.open("layers/{}".format(key))
+    # Get the indeces of the geographic points
+    y1, x1 = dataset.index(p1[0], p1[1])
+    y2, x2 = dataset.index(p2[0], p2[1])
+    window = rasterio.windows.Window(x1, y1, x2 - x1, y2 - y1)
+    clip = dataset.read(window=window)
+    # Define the metadata and save the image
+    meta = dataset.meta
+    print("({}, {}) ".format(window.width, window.height), end="")
+    meta['width'], meta['height'] = window.width, window.height
+    meta['transform'] = rasterio.windows.transform(window, dataset.transform)
+    with rasterio.open("tmp/{}".format(key), 'w', **meta) as dst:
+        dst.write(clip)
 
 # Parses the command-line arguments for the coordinates
 def parseCoords():
@@ -158,42 +133,74 @@ def parseCoords():
     return (tl_corner, br_corner)
 
 def main():
-    print("///////////////////////////////////////////////////////////////////")
-    print("/               Animal Habitat Suitability Calculator                 /")
-    print("/                  Authored by Andrea Nosler                      /")
-    print("///////////////////////////////////////////////////////////////////\n")
-
+    print("| Animal Habitat Suitability Calculator  - Andrea Nosler |\n")
+    print("Selected Layers: ")
+    for key in layers.keys():
+        print("   -{}".format(key))
+    print("")
     corners = parseCoords()
     corner_point1, corner_point2 = corners[0], corners[1]
     xdif = corner_point2[0] - corner_point1[0]
     ydif = corner_point1[1] - corner_point2[1]
-
     height = int(width * (ydif / xdif))
+    
+    print("Clipping layers...")
+    # Clip user-specified layers
+    for key in layers.keys():
+        print("   - Clipping {}...".format(key), end="")
+        clipLayer(key, corner_point1, corner_point2, width, height)
+        print("Done.")
+    print("")
 
-    clipLayers(corner_point1, corner_point2, width, height)
+    # Clip the water mask
+    #clipLayer("water_mask.tif", corner_point1, corner_point2, width, height)
+    
+    # If population layer not already clipped, clip to ensure it's availible
+    if "pop_2020.tif" not in layers.keys():
+        print("   - Clipping popdensity.tif...", end="")
+        clipLayer("popdensity.tif", corner_point1, corner_point2, width, height)
+        print("Done.")
+
     calcSuitability(width, height)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c1", "--corner_one", type = str, required = True)
-    parser.add_argument("-c2", "--corner_two", type = str,required = True)
-    parser.add_argument("-pn", "--population_need", type = float, required = True)
-    parser.add_argument("-pc", "--population_contribution", type = float, required = True)
-    parser.add_argument("-sn", "--soil_moisture_need", type = float, required = True)
-    parser.add_argument("-sc", "--soil_moisture_contribution", type = float, required = True)
-    parser.add_argument("-vn", "--vegetation_need", type = float, required = True)
-    parser.add_argument("-vc", "--vegetation_contribution", type = float, required = True)
-    parser.add_argument("-w", "--image_width", type = int, default = 500, required = False)
+    parser.add_argument("-c2", "--corner_two", type = str, required = True)
+    parser.add_argument("-pn", "--population_need", type = float, required = False)
+    parser.add_argument("-pc", "--population_contribution", type = float, required = False)
+    parser.add_argument("-sn", "--soil_moisture_need", type = float, required = False)
+    parser.add_argument("-sc", "--soil_moisture_contribution", type = float, required = False)
+    parser.add_argument("-vn", "--vegetation_need", type = float, required = False)
+    parser.add_argument("-vc", "--vegetation_contribution", type = float, required = False)
+    parser.add_argument("-tn", "--temperature_need", type = int, required = False)
+    parser.add_argument("-tc", "--temperature_contribution", type = int, required = False)
+    parser.add_argument("-w", "--image_width", type = int, default = 1000, required = False)
     parser.add_argument("-d", "--debugging", type = bool, default = False, required = False)
+    parser.add_argument("-dwm", "--draw_water_mask", type = bool, default = True, required = False)
+    parser.add_argument("-dpl", "--draw_pop_layer", type = bool, default = True, required = False)
+    
     args = parser.parse_args()
     c1 = args.corner_one
     c2 = args.corner_two
-    pn = args.population_need
-    pc = args.population_contribution
-    sn = args.soil_moisture_need
-    sc = args.soil_moisture_contribution
-    vn = args.vegetation_need
-    vc = args.vegetation_contribution
     width = args.image_width
     debugging = args.debugging
+    draw_water = args.draw_water_mask
+    draw_pop = args.draw_pop_layer
+
+    # Determine which layers are to be analyzed
+    layers = {}
+    if args.population_need is not None and args.population_contribution is not None:
+        layers["popdensity.tif"] = (args.population_need, args.population_contribution)
+    if args.soil_moisture_need is not None and args.soil_moisture_contribution is not None:
+        layers["soil_moisture.tif"] = (args.soil_moisture_need, args.soil_moisture_contribution)
+    if args.vegetation_need is not None and args.vegetation_contribution is not None:
+        layers["veg_EVI.tif"] = (args.vegetation_need, args.vegetation_contribution)
+    if args.temperature_need is not None and args.temperature_contribution is not None:
+        layers["day_LST.tif"] = (args.temperature_need, args.temperature_contribution)
+
+    if not layers:
+        print("No valid Need/Contribution pair submitted!")
+        quit
+    
     main()
