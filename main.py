@@ -22,26 +22,13 @@ def DEBUG(string):
 # Completes the suitability calcualations and exports the resultant image.
 # Side Effects: cleans the tmp/ folder
 # TODO: Utilize a buffer as opposed to constantly re-reading data and doing it in place
-def calcSuitability(width, height):
+def exportToImage(width, height):
     r_buf = np.zeros((width, height))
     g_buf = np.zeros((width, height))
 
-    # Add population to red channel
-    if(draw_pop):
-        print("Applying population to red buffer...", end = "")
-        with rasterio.open("tmp/popdensity.tif") as dataset:
-            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
-            max = layer_data.max()
-            co = 255 / max
-            for i in range(width):
-                for j in range(height):
-                    if (layer_data[j,i] > 0):
-                        r_buf[i][j] = (layer_data[j,i]*co)
-        print("Done.")
-
     # Calculate suitability and accumulate on green channel
     for key in layers.keys():
-        print("Applying suitability for {} to green buffer...".format(key), end = "")
+        print("Applying suitability for {} to buffer...".format(key), end = "")
         with rasterio.open("tmp/{}".format(key)) as dataset:
             need, contribution = layers[key]
             layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
@@ -54,7 +41,24 @@ def calcSuitability(width, height):
                             g_buf[i][j] += (layer_data[j,i]/need) * contribution
         print("Done.")
     
-    out_image = Image.new(mode = "RGB", size = (width, height))
+    # Add population to red channel
+    if(draw_pop):
+        print("Applying population to buffer...", end = "")
+        with rasterio.open("tmp/popdensity.tif") as dataset:
+            layer_data = dataset.read(1, out_shape = (dataset.count, height, width), resampling = Resampling.bilinear)
+            max = layer_data.max()
+            co = 255 / max
+            for i in range(width):
+                for j in range(height):
+                    if (layer_data[j,i] > 0):
+                        r_buf[i][j] = (layer_data[j,i]*co)
+        print("Done.")
+
+    if(not draw_pop and not draw_water):
+        out_image = Image.new(mode = "L", size = (width, height))
+    else:
+        out_image = Image.new(mode = "RGB", size = (width, height))
+
     pixels = out_image.load()
 
     # Apply values to the out_image pixel map
@@ -70,10 +74,17 @@ def calcSuitability(width, height):
                     else:
                         pixels[i,j] = (int(r_buf[i][j]), int(g_buf[i][j] * 255), 0)
         print("Done.")
-    else:
+    elif(draw_pop):
+        print("Writing to RGB bitmap...", end = "")
         for i in range(width):
             for j in range(height):
                 pixels[i,j] = (int(r_buf[i][j]), int(g_buf[i][j] * 255), 0)
+    else:
+        print("Writing to greyscale bitmap...", end = "")
+        for i in range(width):
+            for j in range(height):
+                pixels[i,j] = (int(g_buf[i][j] * 255))
+
 
     filename = "output/{}.png".format(str(time.time()).replace(".",""))
     print("Saving file {}...".format(filename), end = "")
@@ -99,7 +110,7 @@ def clipLayer(key, p1, p2, width, height):
     clip = dataset.read(window=window)
     # Define the metadata and save the image
     meta = dataset.meta
-    print("({}, {}) ".format(window.width, window.height), end="")
+    print("({}, {})...".format(window.width, window.height), end="")
     meta['width'], meta['height'] = window.width, window.height
     meta['transform'] = rasterio.windows.transform(window, dataset.transform)
     with rasterio.open("tmp/{}".format(key), 'w', **meta) as dst:
@@ -161,7 +172,7 @@ def main():
         clipLayer("popdensity.tif", corner_point1, corner_point2, width, height)
         print("Done.")
 
-    calcSuitability(width, height)
+    exportToImage(width, height)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
