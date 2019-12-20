@@ -175,9 +175,9 @@ if __name__ == "__main__":
     parser.add_argument("-vc", "--vegetation_contribution", type = float, required = False)
     parser.add_argument("-tn", "--temperature_need", type = int, required = False)
     parser.add_argument("-tc", "--temperature_contribution", type = int, required = False)
-    parser.add_argument("-w", "--image_width", type = int, default = 1000, required = False)
+    parser.add_argument("-w", "--image_width", type = int, default = 4000, required = False)
     parser.add_argument("-d", "--debugging", type = bool, default = False, required = False)
-    parser.add_argument("-dwm", "--draw_water_mask", type = bool, default = True, required = False)
+    parser.add_argument("-dwm", "--draw_water_mask", type = bool, default = False, required = False)
     parser.add_argument("-dpl", "--draw_pop_layer", type = bool, default = True, required = False)
     
     args = parser.parse_args()
